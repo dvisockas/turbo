@@ -714,6 +714,11 @@ test("test navigating a eager frame with a link[method=get] that does not fetch 
   assert.equal(pathname(page.url()), "/src/tests/fixtures/page_with_eager_frame.html")
 })
 
+test("test navigating in a frame with [is='turbo-frame'] attribute", async ({ page }) => {
+  await page.click("#table-link")
+  assert.equal(await page.textContent("#table-body"), "Table reloaded")
+})
+
 async function withoutChangingEventListenersCount(page: Page, callback: () => Promise<void>) {
   const name = "eventListenersAttachedToDocument"
   const setup = () => {

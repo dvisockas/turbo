@@ -420,7 +420,7 @@ export class FrameController
     const id = CSS.escape(this.id)
 
     try {
-      element = activateElement(container.querySelector(`turbo-frame#${id}`), this.sourceURL)
+      element = activateElement(container.querySelector(`turbo-frame#${id}, [is*="turbo-frame"]#${id}`), this.sourceURL)
       if (element) {
         return element
       }
