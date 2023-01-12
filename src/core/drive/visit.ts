@@ -1,11 +1,11 @@
 import { Adapter } from "../native/adapter"
-import { FetchMethod, FetchRequest, FetchRequestDelegate, FetchRequestHeaders } from "../../http/fetch_request"
+import { FetchMethod, FetchRequest, FetchRequestDelegate } from "../../http/fetch_request"
 import { FetchResponse } from "../../http/fetch_response"
 import { History } from "./history"
 import { getAnchor } from "../url"
 import { Snapshot } from "../snapshot"
 import { PageSnapshot } from "./page_snapshot"
-import { Action, ResolvingFunctions } from "../types"
+import { Action } from "../types"
 import { getHistoryMethodForAction, uuid } from "../../util"
 import { PageView } from "./page_view"
 import { StreamMessage } from "../streams/stream_message"
@@ -42,6 +42,7 @@ export type VisitOptions = {
   action: Action
   historyChanged: boolean
   referrer?: URL
+  snapshot?: PageSnapshot
   snapshotHTML?: string
   response?: VisitResponse
   visitCachedSnapshot(snapshot: Snapshot): void
@@ -77,7 +78,7 @@ export enum SystemStatusCode {
 
 export class Visit implements FetchRequestDelegate {
   readonly delegate: VisitDelegate
-  readonly identifier = uuid()
+  readonly identifier = uuid() // Required by turbo-ios
   readonly restorationIdentifier: string
   readonly action: Action
   readonly referrer?: URL
@@ -85,9 +86,6 @@ export class Visit implements FetchRequestDelegate {
   readonly visitCachedSnapshot: (snapshot: Snapshot) => void
   readonly willRender: boolean
   readonly updateHistory: boolean
-  readonly promise: Promise<void>
-
-  private resolvingFunctions!: ResolvingFunctions<void>
 
   followedRedirect = false
   frame?: number
@@ -103,6 +101,7 @@ export class Visit implements FetchRequestDelegate {
   snapshotHTML?: string
   snapshotCached = false
   state = VisitState.initialized
+  snapshot?: PageSnapshot
 
   constructor(
     delegate: VisitDelegate,
@@ -113,12 +112,12 @@ export class Visit implements FetchRequestDelegate {
     this.delegate = delegate
     this.location = location
     this.restorationIdentifier = restorationIdentifier || uuid()
-    this.promise = new Promise((resolve, reject) => (this.resolvingFunctions = { resolve, reject }))
 
     const {
       action,
       historyChanged,
       referrer,
+      snapshot,
       snapshotHTML,
       response,
       visitCachedSnapshot,
@@ -133,6 +132,7 @@ export class Visit implements FetchRequestDelegate {
     this.action = action
     this.historyChanged = historyChanged
     this.referrer = referrer
+    this.snapshot = snapshot
     this.snapshotHTML = snapshotHTML
     this.response = response
     this.isSamePage = this.delegate.locationWithActionIsSamePage(this.location, this.action)
@@ -180,8 +180,6 @@ export class Visit implements FetchRequestDelegate {
       }
       this.cancelRender()
       this.state = VisitState.canceled
-
-      this.resolvingFunctions.reject()
     }
   }
 
@@ -195,8 +193,6 @@ export class Visit implements FetchRequestDelegate {
         this.adapter.visitCompleted(this)
         this.delegate.visitCompleted(this)
       }
-
-      this.resolvingFunctions.resolve()
     }
   }
 
@@ -204,8 +200,6 @@ export class Visit implements FetchRequestDelegate {
     if (this.state == VisitState.started) {
       this.state = VisitState.failed
       this.adapter.visitFailed(this)
-
-      this.resolvingFunctions.reject()
     }
   }
 
@@ -323,6 +317,8 @@ export class Visit implements FetchRequestDelegate {
       this.adapter.visitProposedToLocation(this.redirectedToLocation, {
         action: "replace",
         response: this.response,
+        shouldCacheSnapshot: false,
+        willRender: false,
       })
       this.followedRedirect = true
     }
@@ -333,6 +329,7 @@ export class Visit implements FetchRequestDelegate {
       this.render(async () => {
         this.cacheSnapshot()
         this.performScroll()
+        this.changeHistory()
         this.adapter.visitRendered(this)
       })
     }
@@ -340,7 +337,7 @@ export class Visit implements FetchRequestDelegate {
 
   // Fetch request delegate
 
-  prepareHeadersForRequest(headers: FetchRequestHeaders, request: FetchRequest) {
+  prepareRequest(request: FetchRequest) {
     if (this.acceptsStreamResponse) {
       request.acceptResponseType(StreamMessage.contentType)
     }
@@ -461,7 +458,7 @@ export class Visit implements FetchRequestDelegate {
 
   cacheSnapshot() {
     if (!this.snapshotCached) {
-      this.view.cacheSnapshot().then((snapshot) => snapshot && this.visitCachedSnapshot(snapshot))
+      this.view.cacheSnapshot(this.snapshot).then((snapshot) => snapshot && this.visitCachedSnapshot(snapshot))
       this.snapshotCached = true
     }
   }

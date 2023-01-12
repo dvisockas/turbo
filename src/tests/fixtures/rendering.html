@@ -5,6 +5,9 @@
     <title>Turbo</title>
     <script src="/dist/turbo.es2017-umd.js" data-turbo-track="reload"></script>
     <script src="/src/tests/fixtures/test.js"></script>
+    <script type="importmap" nonce="123">
+      { "imports": { "turbo": "/dist/turbo.es2017-umd.js?123"} }
+    </script>
     <script type="module">
       const permanentVideoElementLoaded = new Promise(resolve => {
         addEventListener("DOMContentLoaded", () => {
@@ -21,9 +24,6 @@
         }
       })
     </script>
-    <script type="importmap" nonce="123">
-      { "imports": { "turbo": "/dist/turbo.es2017-umd.js?123"} }
-    </script>
     <style>
       .push-off-screen { margin-top: 1000px; }
     </style>
@@ -33,6 +33,7 @@
       <h1>Rendering</h1>
       <p><a id="same-origin-link" href="/src/tests/fixtures/one.html">Same-origin link</a></p>
       <p><a id="tracked-asset-change-link" href="/src/tests/fixtures/tracked_asset_change.html">Tracked asset change</a></p>
+      <form id="tracked-asset-change-form" action="/__turbo/notfound" method="post"><button type="submit">Submit</button></form>
       <p><a id="tracked-nonce-tag-link" href="/src/tests/fixtures/tracked_nonce_tag.html">Tracked nonce tag</a></p>
       <p><a id="additional-assets-link" href="/src/tests/fixtures/additional_assets.html">Additional assets</a></p>
       <p><a id="head-script-link" href="/src/tests/fixtures/head_script.html">Head script</a></p>
@@ -44,6 +45,7 @@
       <p><a id="permanent-in-frame-element-link" href="/src/tests/fixtures/permanent_element.html" data-turbo-frame="frame">Permanent element in frame</a></p>
       <p><a id="permanent-in-frame-without-layout-element-link" href="/src/tests/fixtures/frames/without_layout.html" data-turbo-frame="frame">Permanent element in frame without layout</a></p>
       <p><a id="delayed-link" href="/__turbo/delayed_response">Delayed link</a></p>
+      <p><a id="redirect-link" href="/__turbo/redirect">Redirect link</a></p>
       <form>
         <input type="text" id="text-input">
         <input type="radio" id="radio-input">

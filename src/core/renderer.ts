@@ -1,9 +1,13 @@
-import { ResolvingFunctions } from "./types"
 import { Bardo, BardoDelegate } from "./bardo"
 import { Snapshot } from "./snapshot"
 import { ReloadReason } from "./native/browser_adapter"
 
-export type Render<E> = (newElement: E, currentElement: E) => void
+type ResolvingFunctions<T = unknown> = {
+  resolve(value: T | PromiseLike<T>): void
+  reject(reason?: any): void
+}
+
+export type Render<E> = (currentElement: E, newElement: E) => void
 
 export abstract class Renderer<E extends Element, S extends Snapshot<E> = Snapshot<E>> implements BardoDelegate {
   readonly currentSnapshot: S
@@ -45,8 +49,8 @@ export abstract class Renderer<E extends Element, S extends Snapshot<E> = Snapsh
     }
   }
 
-  preservingPermanentElements(callback: () => void) {
-    Bardo.preservingPermanentElements(this, this.permanentElementMap, callback)
+  async preservingPermanentElements(callback: () => void) {
+    await Bardo.preservingPermanentElements(this, this.permanentElementMap, callback)
   }
 
   focusFirstAutofocusableElement() {

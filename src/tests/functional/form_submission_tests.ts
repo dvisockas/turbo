@@ -185,8 +185,31 @@ test("test standard GET form submission", async ({ page }) => {
   assert.equal(getSearchParam(page.url(), "greeting"), "Hello from a form")
 })
 
-test("test standard GET form submission with data-turbo-stream", async ({ page }) => {
+test("test standard GET HTMLFormElement.requestSubmit() with Turbo Action", async ({ page }) => {
+  await page.evaluate(() => {
+    const formControl = document.querySelector<HTMLSelectElement>("#external-select")
+
+    if (formControl && formControl.form) formControl.form.requestSubmit()
+  })
+  await nextEventNamed(page, "turbo:load")
+
+  assert.equal(await page.textContent("h1"), "Form", "Retains original page state")
+  assert.equal(await page.textContent("#hello h2"), "Hello from a frame", "navigates #hello turbo frame")
+  assert.equal(await visitAction(page), "replace", "reads Turbo Action from <form>")
+  assert.equal(pathname(page.url()), "/src/tests/fixtures/frames/hello.html", "promotes frame navigation to page Visit")
+  assert.equal(getSearchParam(page.url(), "greeting"), "Hello from a replace Visit", "encodes <form> into request")
+})
+
+test("test standard GET form submission with [data-turbo-stream] declared on the form", async ({ page }) => {
   await page.click("#standard-get-form-with-stream-opt-in-submit")
+
+  const { fetchOptions } = await nextEventNamed(page, "turbo:before-fetch-request")
+
+  assert.ok(fetchOptions.headers["Accept"].includes("text/vnd.turbo-stream.html"))
+})
+
+test("test standard GET form submission with [data-turbo-stream] declared on submitter", async ({ page }) => {
+  await page.click("#standard-get-form-with-stream-opt-in-submitter")
 
   const { fetchOptions } = await nextEventNamed(page, "turbo:before-fetch-request")
 
@@ -432,6 +455,12 @@ test("test invalid form submission with server error status", async ({ page }) =
   assert.equal(await title.textContent(), "Internal Server Error", "renders the response HTML")
   assert.notOk(await hasSelector(page, "head > #form-fixture-styles"), "replaces head")
   assert.notOk(await hasSelector(page, "#frame form.reject"), "replaces entire page")
+})
+
+test("test form submission with network error", async ({ page }) => {
+  await page.context().setOffline(true)
+  await page.click("#reject-form [type=submit]")
+  await nextEventOnTarget(page, "reject-form", "turbo:fetch-request-error")
 })
 
 test("test submitter form submission reads button attributes", async ({ page }) => {
@@ -825,8 +854,7 @@ test("test link method form submission submits a single request", async ({ page 
 
   const { fetchOptions } = await nextEventNamed(page, "turbo:before-fetch-request")
 
-  await noNextEventNamed(page, "turbo:before-fetch-request")
-
+  assert.ok(await noNextEventNamed(page, "turbo:before-fetch-request"))
   assert.equal(fetchOptions.method, "POST", "[data-turbo-method] overrides the GET method")
   assert.equal(requestCounter, 1, "submits a single HTTP request")
 })
@@ -839,8 +867,8 @@ test("test link method form submission inside frame submits a single request", a
   await nextBeat()
 
   const { fetchOptions } = await nextEventNamed(page, "turbo:before-fetch-request")
-  await noNextEventNamed(page, "turbo:before-fetch-request")
 
+  assert.ok(await noNextEventNamed(page, "turbo:before-fetch-request"))
   assert.equal(fetchOptions.method, "POST", "[data-turbo-method] overrides the GET method")
   assert.equal(requestCounter, 1, "submits a single HTTP request")
 })
@@ -853,8 +881,8 @@ test("test link method form submission targetting frame submits a single request
   await nextBeat()
 
   const { fetchOptions } = await nextEventNamed(page, "turbo:before-fetch-request")
-  await noNextEventNamed(page, "turbo:before-fetch-request")
 
+  assert.ok(await noNextEventNamed(page, "turbo:before-fetch-request"))
   assert.equal(fetchOptions.method, "POST", "[data-turbo-method] overrides the GET method")
   assert.equal(requestCounter, 2, "submits a single HTTP request then follows a redirect")
 })
@@ -1039,7 +1067,9 @@ test("test turbo:before-fetch-response fires on the form element", async ({ page
 
 test("test POST to external action ignored", async ({ page }) => {
   await page.click("#submit-external")
-  await noNextEventNamed(page, "turbo:before-fetch-request")
+
+  assert.ok(await noNextEventNamed(page, "turbo:before-fetch-request"))
+
   await nextBody(page)
 
   assert.equal(page.url(), "https://httpbin.org/post")
@@ -1047,7 +1077,9 @@ test("test POST to external action ignored", async ({ page }) => {
 
 test("test POST to external action within frame ignored", async ({ page }) => {
   await page.click("#submit-external-within-ignored")
-  await noNextEventNamed(page, "turbo:before-fetch-request")
+
+  assert.ok(await noNextEventNamed(page, "turbo:before-fetch-request"))
+
   await nextBody(page)
 
   assert.equal(page.url(), "https://httpbin.org/post")
@@ -1055,7 +1087,9 @@ test("test POST to external action within frame ignored", async ({ page }) => {
 
 test("test POST to external action targetting frame ignored", async ({ page }) => {
   await page.click("#submit-external-target-ignored")
-  await noNextEventNamed(page, "turbo:before-fetch-request")
+
+  assert.ok(await noNextEventNamed(page, "turbo:before-fetch-request"))
+
   await nextBody(page)
 
   assert.equal(page.url(), "https://httpbin.org/post")

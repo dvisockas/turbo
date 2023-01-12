@@ -2,12 +2,14 @@ import { Page, test } from "@playwright/test"
 import { assert } from "chai"
 import { get } from "http"
 import {
+  cancelNextEvent,
   getSearchParam,
   isScrolledToSelector,
   isScrolledToTop,
   nextBeat,
   nextEventNamed,
   noNextAttributeMutationNamed,
+  pathname,
   readEventLogs,
   scrollToSelector,
   visitAction,
@@ -39,38 +41,9 @@ test("test programmatically visiting a same-origin location", async ({ page }) =
   assert.ok(timing)
 })
 
-test("test programmatically Turbo.visit-ing a same-origin location", async ({ page }) => {
-  const urlBeforeVisit = page.url()
-  await page.evaluate(async () => await window.Turbo.visit("/src/tests/fixtures/one.html"))
-
-  const urlAfterVisit = page.url()
-  assert.notEqual(urlBeforeVisit, urlAfterVisit)
-  assert.equal(await visitAction(page), "advance")
-
-  const { url: urlFromBeforeVisitEvent } = await nextEventNamed(page, "turbo:before-visit")
-  assert.equal(urlFromBeforeVisitEvent, urlAfterVisit)
-
-  const { url: urlFromVisitEvent } = await nextEventNamed(page, "turbo:visit")
-  assert.equal(urlFromVisitEvent, urlAfterVisit)
-
-  const { timing } = await nextEventNamed(page, "turbo:load")
-  assert.ok(timing)
-})
-
 test("skip programmatically visiting a cross-origin location falls back to window.location", async ({ page }) => {
   const urlBeforeVisit = page.url()
   await visitLocation(page, "about:blank")
-
-  const urlAfterVisit = page.url()
-  assert.notEqual(urlBeforeVisit, urlAfterVisit)
-  assert.equal(await visitAction(page), "load")
-})
-
-test("skip programmatically Turbo.visit-ing a cross-origin location falls back to window.location", async ({
-  page,
-}) => {
-  const urlBeforeVisit = page.url()
-  await page.evaluate(async () => await window.Turbo.visit("about:blank"))
 
   const urlAfterVisit = page.url()
   assert.notEqual(urlBeforeVisit, urlAfterVisit)
@@ -91,6 +64,13 @@ test("test visiting a location served with a non-HTML content type", async ({ pa
   assert.equal(await visitAction(page), "load")
 })
 
+test("test canceling a turbo:click event falls back to built-in browser navigation", async ({ page }) => {
+  await cancelNextEvent(page, "turbo:click")
+  await Promise.all([page.waitForNavigation(), page.click("#same-origin-link")])
+
+  assert.equal(pathname(page.url()), "/src/tests/fixtures/one.html")
+})
+
 test("test canceling a before-visit event prevents navigation", async ({ page }) => {
   await cancelNextVisit(page)
   const urlBeforeVisit = page.url()
@@ -104,28 +84,6 @@ test("test canceling a before-visit event prevents navigation", async ({ page })
 
   const urlAfterVisit = page.url()
   assert.equal(urlAfterVisit, urlBeforeVisit)
-})
-
-test("test canceling a before-visit event prevents a Turbo.visit-initiated navigation", async ({ page }) => {
-  await cancelNextVisit(page)
-  const urlBeforeVisit = page.url()
-
-  assert.notOk<boolean>(
-    await willChangeBody(page, async () => {
-      await page.evaluate(async () => {
-        try {
-          return await window.Turbo.visit("/src/tests/fixtures/one.html")
-        } catch {
-          const title = document.querySelector("h1")
-          if (title) title.innerHTML = "Visit canceled"
-        }
-      })
-    })
-  )
-
-  const urlAfterVisit = page.url()
-  assert.equal(urlAfterVisit, urlBeforeVisit)
-  assert.equal(await page.textContent("h1"), "Visit canceled")
 })
 
 test("test navigation by history is not cancelable", async ({ page }) => {
@@ -215,7 +173,7 @@ test("test cache does not override response after redirect", async ({ page }) =>
 })
 
 function cancelNextVisit(page: Page): Promise<void> {
-  return page.evaluate(() => addEventListener("turbo:before-visit", (event) => event.preventDefault(), { once: true }))
+  return cancelNextEvent(page, "turbo:before-visit")
 }
 
 function contentTypeOfURL(url: string): Promise<string | undefined> {
@@ -251,6 +209,15 @@ test("test can scroll to element after history-initiated turbo:visit", async ({ 
   await nextEventNamed(page, "turbo:load")
 
   assert(await isScrolledToSelector(page, "#" + id), "scrolls after history-initiated turbo:load")
+})
+
+test("test Visit with network error", async ({ page }) => {
+  await page.evaluate(() => {
+    addEventListener("turbo:fetch-request-error", (event: Event) => event.preventDefault())
+  })
+  await page.context().setOffline(true)
+  await page.click("#same-origin-link")
+  await nextEventNamed(page, "turbo:fetch-request-error")
 })
 
 async function visitLocation(page: Page, location: string) {

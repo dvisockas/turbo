@@ -2,6 +2,7 @@ import { test } from "@playwright/test"
 import { assert } from "chai"
 import {
   clickWithoutScrolling,
+  getSearchParam,
   hash,
   hasSelector,
   isScrolledToSelector,
@@ -11,6 +12,7 @@ import {
   nextEventNamed,
   noNextEventNamed,
   pathname,
+  pathnameForIFrame,
   readEventLogs,
   search,
   selectorHasFocus,
@@ -86,6 +88,41 @@ test("test following a same-origin unannotated custom element link", async ({ pa
   assert.equal(await visitAction(page), "advance")
 })
 
+test("test drive enabled; click an element in the shadow DOM wrapped by a link in the light DOM", async ({ page }) => {
+  page.click("#shadow-dom-drive-enabled span")
+  await nextBody(page)
+  assert.equal(pathname(page.url()), "/src/tests/fixtures/one.html")
+  assert.equal(await visitAction(page), "advance")
+})
+
+test("test drive disabled; click an element in the shadow DOM within data-turbo='false'", async ({ page }) => {
+  page.click("#shadow-dom-drive-disabled span")
+  await nextBody(page)
+  assert.equal(pathname(page.url()), "/src/tests/fixtures/one.html")
+  assert.equal(await visitAction(page), "load")
+})
+
+test("test drive enabled; click an element in the slot", async ({ page }) => {
+  page.click("#element-in-slot")
+  await nextBody(page)
+  assert.equal(pathname(page.url()), "/src/tests/fixtures/one.html")
+  assert.equal(await visitAction(page), "advance")
+})
+
+test("test drive disabled; click an element in the slot within data-turbo='false'", async ({ page }) => {
+  page.click("#element-in-slot-disabled")
+  await nextBody(page)
+  assert.equal(pathname(page.url()), "/src/tests/fixtures/one.html")
+  assert.equal(await visitAction(page), "load")
+})
+
+test("test drive disabled; click an element in the nested slot within data-turbo='false'", async ({ page }) => {
+  page.click("#element-in-nested-slot-disabled")
+  await nextBody(page)
+  assert.equal(pathname(page.url()), "/src/tests/fixtures/one.html")
+  assert.equal(await visitAction(page), "load")
+})
+
 test("test following a same-origin unannotated link with search params", async ({ page }) => {
   page.click("#same-origin-unannotated-link-search-params")
   await nextBody(page)
@@ -99,6 +136,17 @@ test("test following a same-origin unannotated form[method=GET]", async ({ page 
   await nextBody(page)
   assert.equal(pathname(page.url()), "/src/tests/fixtures/one.html")
   assert.equal(await visitAction(page), "advance")
+})
+
+test("test following a same-origin data-turbo-method=get link", async ({ page }) => {
+  await page.click("#same-origin-get-link-form")
+  await nextEventNamed(page, "turbo:submit-start")
+  await nextEventNamed(page, "turbo:submit-end")
+  await nextEventNamed(page, "turbo:load")
+
+  assert.equal(pathname(page.url()), "/src/tests/fixtures/navigation.html")
+  assert.equal(getSearchParam(page.url(), "a"), "one")
+  assert.equal(getSearchParam(page.url(), "b"), "two")
 })
 
 test("test following a same-origin data-turbo-action=replace link", async ({ page }) => {
@@ -151,16 +199,24 @@ test("test following a POST form clears cache", async ({ page }) => {
   assert.notOk(await hasSelector(page, "some-cached-element"))
 })
 
-test("test following a same-origin data-turbo=false link", async ({ page }) => {
-  page.click("#same-origin-false-link")
+test("test following a same-origin POST link with data-turbo-action=replace", async ({ page }) => {
+  page.click("#same-origin-replace-post-link")
   await nextBody(page)
+
+  assert.equal(pathname(page.url()), "/src/tests/fixtures/one.html")
+  assert.equal(await visitAction(page), "replace")
+})
+
+test("test following a same-origin data-turbo=false link", async ({ page }) => {
+  await page.click("#same-origin-false-link")
+  await page.waitForEvent("load")
   assert.equal(pathname(page.url()), "/src/tests/fixtures/one.html")
   assert.equal(await visitAction(page), "load")
 })
 
 test("test following a same-origin unannotated link inside a data-turbo=false container", async ({ page }) => {
-  page.click("#same-origin-unannotated-link-inside-false-container")
-  await nextBody(page)
+  await page.click("#same-origin-unannotated-link-inside-false-container")
+  await page.waitForEvent("load")
   assert.equal(pathname(page.url()), "/src/tests/fixtures/one.html")
   assert.equal(await visitAction(page), "load")
 })
@@ -262,6 +318,8 @@ test("test skip link with hash-only path scrolls to the anchor without a visit",
   )
 
   assert.ok(await isScrolledToSelector(page, "#main"), "scrolled to #main")
+  assert.equal(pathname(page.url()), "/src/tests/fixtures/navigation.html")
+  assert.equal(hash(page.url()), "#main")
 })
 
 test("test skip link with hash-only path moves focus and changes tab order", async ({ page }) => {
@@ -274,12 +332,16 @@ test("test skip link with hash-only path moves focus and changes tab order", asy
     await selectorHasFocus(page, "#same-origin-unannotated-link"),
     "skips to first interactive element after #main"
   )
+  assert.equal(pathname(page.url()), "/src/tests/fixtures/navigation.html")
+  assert.equal(hash(page.url()), "#main")
 })
 
 test("test same-page anchored replace link assumes the intention was a refresh", async ({ page }) => {
   await page.click("#refresh-link")
   await nextBody(page)
   assert.ok(await isScrolledToSelector(page, "#main"), "scrolled to #main")
+  assert.equal(pathname(page.url()), "/src/tests/fixtures/navigation.html")
+  assert.equal(hash(page.url()), "#main")
 })
 
 test("test navigating back to anchored URL", async ({ page }) => {
@@ -294,6 +356,8 @@ test("test navigating back to anchored URL", async ({ page }) => {
   await nextBody(page)
 
   assert.ok(await isScrolledToSelector(page, "#main"), "scrolled to #main")
+  assert.equal(pathname(page.url()), "/src/tests/fixtures/navigation.html")
+  assert.equal(hash(page.url()), "#main")
 })
 
 test("test following a redirection", async ({ page }) => {
@@ -354,7 +418,9 @@ test("test does not fire turbo:load twice after following a redirect", async ({ 
   page.click("#redirection-link")
 
   await nextBeat() // 301 redirect response
-  await noNextEventNamed(page, "turbo:load")
+
+  assert.ok(await noNextEventNamed(page, "turbo:load"))
+
   await nextBeat() // 200 response
   await nextBody(page)
   await nextEventNamed(page, "turbo:load")
@@ -375,9 +441,57 @@ test("test navigating back whilst a visit is in-flight", async ({ page }) => {
   assert.equal(await visitAction(page), "restore")
 })
 
-test("test ignores links that target an iframe", async ({ page }) => {
-  await page.click("#targets-iframe")
+test("test ignores links with a [target] attribute that target an iframe with a matching [name]", async ({ page }) => {
+  await page.click("#link-target-iframe")
   await nextBeat()
+  await noNextEventNamed(page, "turbo:load")
 
   assert.equal(pathname(page.url()), "/src/tests/fixtures/navigation.html")
+  assert.equal(await pathnameForIFrame(page, "iframe"), "/src/tests/fixtures/one.html")
+})
+
+test("test ignores links with a [target] attribute that targets an iframe with [name='']", async ({ page }) => {
+  await page.click("#link-target-empty-name-iframe")
+  await nextBeat()
+  await noNextEventNamed(page, "turbo:load")
+
+  assert.equal(pathname(page.url()), "/src/tests/fixtures/one.html")
+})
+
+test("test ignores forms with a [target] attribute that targets an iframe with a matching [name]", async ({ page }) => {
+  await page.click("#form-target-iframe button")
+  await nextBeat()
+  await noNextEventNamed(page, "turbo:load")
+
+  assert.equal(pathname(page.url()), "/src/tests/fixtures/navigation.html")
+  assert.equal(await pathnameForIFrame(page, "iframe"), "/src/tests/fixtures/one.html")
+})
+
+test("test ignores forms with a button[formtarget] attribute that targets an iframe with [name='']", async ({
+  page,
+}) => {
+  await page.click("#form-target-empty-name-iframe button")
+  await nextBeat()
+  await noNextEventNamed(page, "turbo:load")
+
+  assert.equal(pathname(page.url()), "/src/tests/fixtures/one.html")
+})
+
+test("test ignores forms with a button[formtarget] attribute that targets an iframe with a matching [name]", async ({
+  page,
+}) => {
+  await page.click("#button-formtarget-iframe")
+  await nextBeat()
+  await noNextEventNamed(page, "turbo:load")
+
+  assert.equal(pathname(page.url()), "/src/tests/fixtures/navigation.html")
+  assert.equal(await pathnameForIFrame(page, "iframe"), "/src/tests/fixtures/one.html")
+})
+
+test("test ignores forms with a [target] attribute that target an iframe with [name='']", async ({ page }) => {
+  await page.click("#button-formtarget-empty-name-iframe")
+  await nextBeat()
+  await noNextEventNamed(page, "turbo:load")
+
+  assert.equal(pathname(page.url()), "/src/tests/fixtures/one.html")
 })

@@ -1,10 +1,29 @@
 import { JSHandle, Locator, Page } from "@playwright/test"
 
-type EventLog = [string, any, string | null]
-type MutationLog = [string, string | null, string | null]
+type Target = string | null
+
+type EventType = string
+type EventDetail = any
+type EventLog = [EventType, EventDetail, Target]
+
+type MutationAttributeName = string
+type MutationAttributeValue = string | null
+type MutationLog = [MutationAttributeName, Target, MutationAttributeValue]
+
+type BodyHTML = string
+type BodyMutationLog = [BodyHTML]
 
 export function attributeForSelector(page: Page, selector: string, attributeName: string): Promise<string | null> {
   return page.locator(selector).getAttribute(attributeName)
+}
+
+type CancellableEvent = "turbo:click" | "turbo:before-visit"
+
+export function cancelNextEvent(page: Page, eventName: CancellableEvent): Promise<void> {
+  return page.evaluate(
+    (eventName) => addEventListener(eventName, (event) => event.preventDefault(), { once: true }),
+    eventName
+  )
 }
 
 export function clickWithoutScrolling(page: Page, selector: string, options = {}) {
@@ -52,7 +71,7 @@ export async function isScrolledToSelector(page: Page, selector: string): Promis
     const { y: pageY } = await scrollPosition(page)
     const { y: elementY } = boundingBox
     const offset = pageY - elementY
-    return Math.abs(offset) < 2
+    return Math.abs(offset) <= 2
   } else {
     return false
   }
@@ -84,6 +103,31 @@ export async function nextEventOnTarget(page: Page, elementId: string, eventName
   return record[1]
 }
 
+export async function listenForEventOnTarget(page: Page, elementId: string, eventName: string): Promise<void> {
+  return page.locator("#" + elementId).evaluate((element, eventName) => {
+    const eventLogs = (window as any).eventLogs
+
+    element.addEventListener(eventName, ({ target, type }) => {
+      if (target instanceof Element) {
+        eventLogs.push([type, {}, target.id])
+      }
+    })
+  }, eventName)
+}
+
+export async function nextBodyMutation(page: Page): Promise<string | null> {
+  let record: BodyMutationLog | undefined
+  while (!record) {
+    ;[record] = await readBodyMutationLogs(page, 1)
+  }
+  return record[0]
+}
+
+export async function noNextBodyMutation(page: Page): Promise<boolean> {
+  const records = await readBodyMutationLogs(page, 1)
+  return !records.some((record) => !!record)
+}
+
 export async function nextAttributeMutationNamed(
   page: Page,
   elementId: string,
@@ -104,7 +148,7 @@ export async function noNextAttributeMutationNamed(
   attributeName: string
 ): Promise<boolean> {
   const records = await readMutationLogs(page, 1)
-  return !records.some(([name]) => name == attributeName)
+  return !records.some(([name, _, target]) => name == attributeName && target == elementId)
 }
 
 export async function noNextEventNamed(page: Page, eventName: string): Promise<boolean> {
@@ -128,6 +172,17 @@ export function pathname(url: string): string {
   return pathname
 }
 
+export async function pathnameForIFrame(page: Page, name: string) {
+  const locator = await page.locator(`[name="${name}"]`)
+  const location = await locator.evaluate((iframe: HTMLIFrameElement) => iframe.contentWindow?.location)
+
+  if (location) {
+    return pathname(location.href)
+  } else {
+    return ""
+  }
+}
+
 export function propertyForSelector(page: Page, selector: string, propertyName: string): Promise<any> {
   return page.locator(selector).evaluate((element, propertyName) => (element as any)[propertyName], propertyName)
 }
@@ -144,6 +199,10 @@ async function readArray<T>(page: Page, identifier: string, length?: number): Pr
     },
     { identifier, length }
   )
+}
+
+export function readBodyMutationLogs(page: Page, length?: number): Promise<BodyMutationLog[]> {
+  return readArray<BodyMutationLog>(page, "bodyMutationLogs", length)
 }
 
 export function readEventLogs(page: Page, length?: number): Promise<EventLog[]> {

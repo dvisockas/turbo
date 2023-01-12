@@ -4,7 +4,7 @@ import {
   FrameLoadingStyle,
   FrameElementObservedAttribute,
 } from "../../elements/frame_element"
-import { FetchMethod, FetchRequest, FetchRequestDelegate, FetchRequestHeaders } from "../../http/fetch_request"
+import { FetchMethod, FetchRequest, FetchRequestDelegate } from "../../http/fetch_request"
 import { FetchResponse } from "../../http/fetch_response"
 import { AppearanceObserver, AppearanceObserverDelegate } from "../../observers/appearance_observer"
 import {
@@ -20,36 +20,38 @@ import {
 import { FormSubmission, FormSubmissionDelegate } from "../drive/form_submission"
 import { Snapshot } from "../snapshot"
 import { ViewDelegate, ViewRenderOptions } from "../view"
-import { getAction, expandURL, urlsAreEqual, locationIsVisitable } from "../url"
+import { Locatable, getAction, expandURL, urlsAreEqual, locationIsVisitable } from "../url"
 import { FormSubmitObserver, FormSubmitObserverDelegate } from "../../observers/form_submit_observer"
 import { FrameView } from "./frame_view"
-import { LinkClickObserver, LinkClickObserverDelegate } from "../../observers/link_click_observer"
+import { LinkInterceptor, LinkInterceptorDelegate } from "./link_interceptor"
 import { FormLinkClickObserver, FormLinkClickObserverDelegate } from "../../observers/form_link_click_observer"
 import { FrameRenderer } from "./frame_renderer"
 import { session } from "../index"
-import { isAction, Action } from "../types"
+import { Action } from "../types"
 import { VisitOptions } from "../drive/visit"
-import { TurboBeforeFrameRenderEvent, TurboFetchRequestErrorEvent } from "../session"
+import { TurboBeforeFrameRenderEvent } from "../session"
 import { StreamMessage } from "../streams/stream_message"
+import { PageSnapshot } from "../drive/page_snapshot"
 
-export type TurboFrameMissingEvent = CustomEvent<{ fetchResponse: FetchResponse }>
+type VisitFallback = (location: Response | Locatable, options: Partial<VisitOptions>) => Promise<void>
+export type TurboFrameMissingEvent = CustomEvent<{ response: Response; visit: VisitFallback }>
 
 export class FrameController
   implements
-    AppearanceObserverDelegate,
+    AppearanceObserverDelegate<FrameElement>,
     FetchRequestDelegate,
     FormSubmitObserverDelegate,
     FormSubmissionDelegate,
     FrameElementDelegate,
     FormLinkClickObserverDelegate,
-    LinkClickObserverDelegate,
+    LinkInterceptorDelegate,
     ViewDelegate<FrameElement, Snapshot<FrameElement>>
 {
   readonly element: FrameElement
   readonly view: FrameView
-  readonly appearanceObserver: AppearanceObserver
+  readonly appearanceObserver: AppearanceObserver<FrameElement>
   readonly formLinkClickObserver: FormLinkClickObserver
-  readonly linkClickObserver: LinkClickObserver
+  readonly linkInterceptor: LinkInterceptor
   readonly formSubmitObserver: FormSubmitObserver
   formSubmission?: FormSubmission
   fetchResponseLoaded = (_fetchResponse: FetchResponse) => {}
@@ -59,7 +61,6 @@ export class FrameController
   private hasBeenLoaded = false
   private ignoredAttributes: Set<FrameElementObservedAttribute> = new Set()
   private action: Action | null = null
-  private frame?: FrameElement
   readonly restorationIdentifier: string
   private previousFrameElement?: FrameElement
   private currentNavigationElement?: Element
@@ -69,7 +70,7 @@ export class FrameController
     this.view = new FrameView(this, this.element)
     this.appearanceObserver = new AppearanceObserver(this, this.element)
     this.formLinkClickObserver = new FormLinkClickObserver(this, this.element)
-    this.linkClickObserver = new LinkClickObserver(this, this.element)
+    this.linkInterceptor = new LinkInterceptor(this, this.element)
     this.restorationIdentifier = uuid()
     this.formSubmitObserver = new FormSubmitObserver(this, this.element)
   }
@@ -83,7 +84,7 @@ export class FrameController
         this.loadSourceURL()
       }
       this.formLinkClickObserver.start()
-      this.linkClickObserver.start()
+      this.linkInterceptor.start()
       this.formSubmitObserver.start()
     }
   }
@@ -93,7 +94,7 @@ export class FrameController
       this.connected = false
       this.appearanceObserver.stop()
       this.formLinkClickObserver.stop()
-      this.linkClickObserver.stop()
+      this.linkInterceptor.stop()
       this.formSubmitObserver.stop()
     }
   }
@@ -114,6 +115,16 @@ export class FrameController
     if (this.loadingStyle == FrameLoadingStyle.eager || this.hasBeenLoaded) {
       this.loadSourceURL()
     }
+  }
+
+  sourceURLReloaded() {
+    const { src } = this.element
+    this.ignoringChangesToAttribute("complete", () => {
+      this.element.removeAttribute("complete")
+    })
+    this.element.src = null
+    this.element.src = src
+    return this.element.loaded
   }
 
   completeChanged() {
@@ -169,8 +180,11 @@ export class FrameController
           session.frameRendered(fetchResponse, this.element)
           session.frameLoaded(this.element)
           this.fetchResponseLoaded(fetchResponse)
-        } else if (this.sessionWillHandleMissingFrame(fetchResponse)) {
-          await session.frameMissing(this.element, fetchResponse)
+        } else if (this.willHandleFrameMissingFromResponse(fetchResponse)) {
+          console.warn(
+            `A matching frame for #${this.element.id} was missing from the response, transforming into full-page Visit.`
+          )
+          this.visitResponse(fetchResponse.response)
         }
       }
     } catch (error) {
@@ -183,14 +197,15 @@ export class FrameController
 
   // Appearance observer delegate
 
-  elementAppearedInViewport(_element: Element) {
+  elementAppearedInViewport(element: FrameElement) {
+    this.proposeVisitIfNavigatedWithAction(element, element)
     this.loadSourceURL()
   }
 
   // Form link click observer delegate
 
   willSubmitFormLinkToLocation(link: Element): boolean {
-    return link.closest("turbo-frame") == this.element && this.shouldInterceptNavigation(link)
+    return this.shouldInterceptNavigation(link)
   }
 
   submittedFormLinkToLocation(link: Element, _location: URL, form: HTMLFormElement): void {
@@ -198,14 +213,14 @@ export class FrameController
     if (frame) form.setAttribute("data-turbo-frame", frame.id)
   }
 
-  // Link click observer delegate
+  // Link interceptor delegate
 
-  willFollowLinkToLocation(element: Element) {
+  shouldInterceptLinkClick(element: Element, _location: string, _event: MouseEvent) {
     return this.shouldInterceptNavigation(element)
   }
 
-  followedLinkToLocation(element: Element, location: URL) {
-    this.navigateFrame(element, location.href)
+  linkClickIntercepted(element: Element, location: string) {
+    this.navigateFrame(element, location)
   }
 
   // Form submit observer delegate
@@ -221,14 +236,14 @@ export class FrameController
 
     this.formSubmission = new FormSubmission(this, element, submitter)
     const { fetchRequest } = this.formSubmission
-    this.prepareHeadersForRequest(fetchRequest.headers, fetchRequest)
+    this.prepareRequest(fetchRequest)
     this.formSubmission.start()
   }
 
   // Fetch request delegate
 
-  prepareHeadersForRequest(headers: FetchRequestHeaders, request: FetchRequest) {
-    headers["Turbo-Frame"] = this.id
+  prepareRequest(request: FetchRequest) {
+    request.headers["Turbo-Frame"] = this.id
 
     if (this.currentNavigationElement?.hasAttribute("data-turbo-stream")) {
       request.acceptResponseType(StreamMessage.contentType)
@@ -248,17 +263,14 @@ export class FrameController
     this.resolveVisitPromise()
   }
 
-  requestFailedWithResponse(request: FetchRequest, response: FetchResponse) {
+  async requestFailedWithResponse(request: FetchRequest, response: FetchResponse) {
     console.error(response)
+    await this.loadResponse(response)
     this.resolveVisitPromise()
   }
 
   requestErrored(request: FetchRequest, error: Error) {
     console.error(error)
-    dispatch<TurboFetchRequestErrorEvent>("turbo:fetch-request-error", {
-      target: this.element,
-      detail: { request, error },
-    })
     this.resolveVisitPromise()
   }
 
@@ -275,7 +287,7 @@ export class FrameController
   formSubmissionSucceededWithResponse(formSubmission: FormSubmission, response: FetchResponse) {
     const frame = this.findFrameElement(formSubmission.formElement, formSubmission.submitter)
 
-    this.proposeVisitIfNavigatedWithAction(frame, formSubmission.formElement, formSubmission.submitter)
+    frame.delegate.proposeVisitIfNavigatedWithAction(frame, formSubmission.formElement, formSubmission.submitter)
 
     frame.delegate.loadResponse(response)
   }
@@ -356,18 +368,18 @@ export class FrameController
   private navigateFrame(element: Element, url: string, submitter?: HTMLElement) {
     const frame = this.findFrameElement(element, submitter)
 
-    this.proposeVisitIfNavigatedWithAction(frame, element, submitter)
+    frame.delegate.proposeVisitIfNavigatedWithAction(frame, element, submitter)
 
     this.withCurrentNavigationElement(element, () => {
       frame.src = url
     })
   }
 
-  private proposeVisitIfNavigatedWithAction(frame: FrameElement, element: Element, submitter?: HTMLElement) {
+  proposeVisitIfNavigatedWithAction(frame: FrameElement, element: Element, submitter?: HTMLElement) {
     this.action = getVisitAction(submitter, element, frame)
-    this.frame = frame
 
-    if (isAction(this.action)) {
+    if (this.action) {
+      const pageSnapshot = PageSnapshot.fromElement(frame).clone()
       const { visitCachedSnapshot } = frame.delegate
 
       frame.delegate.fetchResponseLoaded = (fetchResponse: FetchResponse) => {
@@ -381,6 +393,7 @@ export class FrameController
             willRender: false,
             updateHistory: false,
             restorationIdentifier: this.restorationIdentifier,
+            snapshot: pageSnapshot,
           }
 
           if (this.action) options.action = this.action
@@ -392,22 +405,39 @@ export class FrameController
   }
 
   changeHistory() {
-    if (this.action && this.frame) {
+    if (this.action) {
       const method = getHistoryMethodForAction(this.action)
-      session.history.update(method, expandURL(this.frame.src || ""), this.restorationIdentifier)
+      session.history.update(method, expandURL(this.element.src || ""), this.restorationIdentifier)
     }
   }
 
-  private sessionWillHandleMissingFrame(fetchResponse: FetchResponse) {
+  private willHandleFrameMissingFromResponse(fetchResponse: FetchResponse): boolean {
     this.element.setAttribute("complete", "")
+
+    const response = fetchResponse.response
+    const visit = async (url: Locatable | Response, options: Partial<VisitOptions> = {}) => {
+      if (url instanceof Response) {
+        this.visitResponse(url)
+      } else {
+        session.visit(url, options)
+      }
+    }
 
     const event = dispatch<TurboFrameMissingEvent>("turbo:frame-missing", {
       target: this.element,
-      detail: { fetchResponse },
+      detail: { response, visit },
       cancelable: true,
     })
 
     return !event.defaultPrevented
+  }
+
+  private async visitResponse(response: Response): Promise<void> {
+    const wrapped = new FetchResponse(response)
+    const responseHTML = await wrapped.responseHTML
+    const { location, redirected, statusCode } = wrapped
+
+    return session.visit(location, { response: { redirected, statusCode, responseHTML } })
   }
 
   private findFrameElement(element: Element, submitter?: HTMLElement) {

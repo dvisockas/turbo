@@ -19,7 +19,7 @@ export {
   TurboBeforeRenderEvent,
   TurboBeforeVisitEvent,
   TurboClickEvent,
-  TurboFetchRequestErrorEvent,
+  TurboBeforeFrameRenderEvent,
   TurboFrameLoadEvent,
   TurboFrameRenderEvent,
   TurboLoadEvent,
@@ -29,10 +29,8 @@ export {
 
 export { TurboSubmitStartEvent, TurboSubmitEndEvent } from "./drive/form_submission"
 export { TurboFrameMissingEvent } from "./frames/frame_controller"
-export { TurboBeforeFetchRequestEvent, TurboBeforeFetchResponseEvent } from "../http/fetch_request"
-export { TurboBeforeStreamRenderEvent } from "../elements/stream_element"
 
-export { StreamActions } from "./streams/stream_actions"
+export { StreamActions, TurboStreamAction, TurboStreamActions } from "./streams/stream_actions"
 
 /**
  * Starts the main session.
@@ -66,8 +64,8 @@ export function registerAdapter(adapter: Adapter) {
  * @param options.snapshotHTML Cached snapshot to render
  * @param options.response Response of the specified location
  */
-export function visit(location: Locatable, options?: Partial<VisitOptions>): Promise<void> {
-  return session.visit(location, options)
+export function visit(location: Locatable, options?: Partial<VisitOptions>) {
+  session.visit(location, options)
 }
 
 /**

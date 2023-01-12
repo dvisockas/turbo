@@ -1,5 +1,7 @@
 (function(eventNames) {
-  function serializeToChannel(object, returned = {}) {
+  function serializeToChannel(object, visited = new Set()) {
+    const returned = {}
+
     for (const key in object) {
       const value = object[key]
 
@@ -8,7 +10,13 @@
       } else if (value instanceof Element) {
         returned[key] = value.outerHTML
       } else if (typeof value == "object") {
-        returned[key] = serializeToChannel(value)
+        if (visited.has(value))  {
+          returned[key] = "skipped to prevent infinitely recursing"
+        } else {
+          visited.add(value)
+
+          returned[key] = serializeToChannel(value, visited)
+        }
       } else {
         returned[key] = value
       }
@@ -38,7 +46,19 @@
        }
      }
    }).observe(document, { subtree: true, childList: true, attributes: true })
+
+  window.bodyMutationLogs = []
+  addEventListener("turbo:load", () => {
+    new MutationObserver((mutations) => {
+      for (const { addedNodes } of mutations) {
+        for (const { localName, outerHTML } of addedNodes) {
+          if (localName == "body") bodyMutationLogs.push([outerHTML])
+        }
+      }
+    }).observe(document.documentElement, { childList: true })
+  }, { once: true })
 })([
+  "turbo:click",
   "turbo:before-stream-render",
   "turbo:before-cache",
   "turbo:before-render",
@@ -57,3 +77,42 @@
   "turbo:frame-missing",
   "turbo:reload"
 ])
+
+customElements.define('custom-link-element', class extends HTMLElement {
+  constructor() {
+    super()
+    this.attachShadow({ mode: 'open' })
+  }
+  connectedCallback() {
+    this.shadowRoot.innerHTML = `
+      <a href="${this.getAttribute('link')}">
+        ${this.getAttribute('text') || `<slot></slot>`}
+      </a>
+    `
+  }
+})
+
+customElements.define('custom-button', class extends HTMLElement {
+  constructor() {
+    super()
+    this.attachShadow({ mode: 'open' }).innerHTML = `
+      <span>
+        Drive in Shadow DOM
+      </span>
+    `
+  }
+})
+
+customElements.define('turbo-toggle', class extends HTMLElement {
+  constructor() {
+    super()
+    this.attachShadow({ mode: 'open' })
+  }
+  connectedCallback() {
+    this.shadowRoot.innerHTML = `
+      <div data-turbo="${this.getAttribute('turbo') || 'true'}">
+        <slot></slot>
+      </div>
+    `
+  }
+})

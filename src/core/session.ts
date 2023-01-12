@@ -11,9 +11,10 @@ import { Navigator, NavigatorDelegate } from "./drive/navigator"
 import { PageObserver, PageObserverDelegate } from "../observers/page_observer"
 import { ScrollObserver } from "../observers/scroll_observer"
 import { StreamMessage } from "./streams/stream_message"
+import { StreamMessageRenderer } from "./streams/stream_message_renderer"
 import { StreamObserver } from "../observers/stream_observer"
-import { Action, Position, StreamSource, isAction } from "./types"
-import { clearBusyState, dispatch, markAsBusy } from "../util"
+import { Action, Position, StreamSource } from "./types"
+import { clearBusyState, dispatch, findClosestRecursively, getVisitAction, markAsBusy } from "../util"
 import { PageView, PageViewDelegate, PageViewRenderOptions } from "./drive/page_view"
 import { Visit, VisitOptions } from "./drive/visit"
 import { PageSnapshot } from "./drive/page_snapshot"
@@ -21,7 +22,6 @@ import { FrameElement } from "../elements/frame_element"
 import { FrameViewRenderOptions } from "./frames/frame_view"
 import { FetchResponse } from "../http/fetch_response"
 import { Preloader, PreloaderDelegate } from "./drive/preloader"
-import { FetchRequest } from "../http/fetch_request"
 
 export type FormMode = "on" | "off" | "optin"
 export type TimingData = unknown
@@ -31,7 +31,6 @@ export type TurboBeforeVisitEvent = CustomEvent<{ url: string }>
 export type TurboClickEvent = CustomEvent<{ url: string; originalEvent: MouseEvent }>
 export type TurboFrameLoadEvent = CustomEvent
 export type TurboBeforeFrameRenderEvent = CustomEvent<{ newFrame: FrameElement } & FrameViewRenderOptions>
-export type TurboFetchRequestErrorEvent = CustomEvent<{ request: FetchRequest; error: Error }>
 export type TurboFrameRenderEvent = CustomEvent<{ fetchResponse: FetchResponse }>
 export type TurboLoadEvent = CustomEvent<{ url: string; timing: TimingData }>
 export type TurboRenderEvent = CustomEvent
@@ -62,6 +61,7 @@ export class Session
   readonly streamObserver = new StreamObserver(this)
   readonly formLinkClickObserver = new FormLinkClickObserver(this, document.documentElement)
   readonly frameRedirector = new FrameRedirector(this, document.documentElement)
+  readonly streamMessageRenderer = new StreamMessageRenderer()
 
   drive = true
   enabled = true
@@ -109,14 +109,14 @@ export class Session
     this.adapter = adapter
   }
 
-  visit(location: Locatable, options: Partial<VisitOptions> = {}): Promise<void> {
+  visit(location: Locatable, options: Partial<VisitOptions> = {}) {
     const frameElement = options.frame ? document.getElementById(options.frame) : null
 
     if (frameElement instanceof FrameElement) {
       frameElement.src = location.toString()
-      return frameElement.loaded
+      frameElement.loaded
     } else {
-      return this.navigator.proposeVisit(expandURL(location), options)
+      this.navigator.proposeVisit(expandURL(location), options)
     }
   }
 
@@ -129,7 +129,7 @@ export class Session
   }
 
   renderStreamMessage(message: StreamMessage | string) {
-    document.documentElement.appendChild(StreamMessage.wrap(message).fragment)
+    this.streamMessageRenderer.render(StreamMessage.wrap(message))
   }
 
   clearCache() {
@@ -206,7 +206,7 @@ export class Session
 
   visitProposedToLocation(location: URL, options: Partial<VisitOptions>) {
     extendURLWithDeprecatedProperties(location)
-    return this.adapter.visitProposedToLocation(location, options)
+    this.adapter.visitProposedToLocation(location, options)
   }
 
   visitStarted(visit: Visit) {
@@ -313,15 +313,6 @@ export class Session
     this.notifyApplicationAfterFrameRender(fetchResponse, frame)
   }
 
-  async frameMissing(frame: FrameElement, fetchResponse: FetchResponse): Promise<void> {
-    console.warn(`A matching frame for #${frame.id} was missing from the response, transforming into full-page Visit.`)
-
-    const responseHTML = await fetchResponse.responseHTML
-    const { location, redirected, statusCode } = fetchResponse
-
-    return this.visit(location, { response: { redirected, statusCode, responseHTML } })
-  }
-
   // Application events
 
   applicationAllowsFollowingLinkToLocation(link: Element, location: URL, ev: MouseEvent) {
@@ -412,8 +403,8 @@ export class Session
   }
 
   elementIsNavigatable(element: Element): boolean {
-    const container = element.closest("[data-turbo]")
-    const withinFrame = element.closest("turbo-frame")
+    const container = findClosestRecursively(element, "[data-turbo]")
+    const withinFrame = findClosestRecursively(element, "turbo-frame")
 
     // Check if Drive is enabled on the session or we're within a Frame.
     if (this.drive || withinFrame) {
@@ -436,8 +427,7 @@ export class Session
   // Private
 
   getActionForLink(link: Element): Action {
-    const action = link.getAttribute("data-turbo-action")
-    return isAction(action) ? action : "advance"
+    return getVisitAction(link) || "advance"
   }
 
   get snapshot() {

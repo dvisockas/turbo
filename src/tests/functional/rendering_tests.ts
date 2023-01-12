@@ -6,7 +6,9 @@ import {
   isScrolledToTop,
   nextBeat,
   nextBody,
+  nextBodyMutation,
   nextEventNamed,
+  noNextBodyMutation,
   pathname,
   propertyForSelector,
   readEventLogs,
@@ -65,6 +67,40 @@ test("test reloads when tracked elements change", async ({ page }) => {
   assert.equal(reason, "tracked_element_mismatch")
 })
 
+test("test reloads when tracked elements change due to failed form submission", async ({ page }) => {
+  await page.click("#tracked-asset-change-form button")
+  await nextBeat()
+
+  await page.evaluate(() => {
+    window.addEventListener(
+      "turbo:reload",
+      (e: any) => {
+        localStorage.setItem("reason", e.detail.reason)
+      },
+      { once: true }
+    )
+
+    window.addEventListener(
+      "beforeunload",
+      () => {
+        localStorage.setItem("unloaded", "true")
+      },
+      { once: true }
+    )
+  })
+
+  await page.click("#tracked-asset-change-form button")
+  await nextBeat()
+
+  const reason = await page.evaluate(() => localStorage.getItem("reason"))
+  const unloaded = await page.evaluate(() => localStorage.getItem("unloaded"))
+
+  assert.equal(pathname(page.url()), "/src/tests/fixtures/rendering.html")
+  assert.equal(await visitAction(page), "load")
+  assert.equal(reason, "tracked_element_mismatch")
+  assert.equal(unloaded, "true")
+})
+
 test("test before-render event supports custom render function", async ({ page }) => {
   await page.evaluate(() =>
     addEventListener("turbo:before-render", (event) => {
@@ -81,6 +117,36 @@ test("test before-render event supports custom render function", async ({ page }
 
   const customRendered = await page.locator("#custom-rendered")
   assert.equal(await customRendered.textContent(), "Custom Rendered", "renders with custom function")
+})
+
+test("test before-render event supports async custom render function", async ({ page }) => {
+  await page.evaluate(() => {
+    const nextEventLoopTick = () =>
+      new Promise<void>((resolve) => {
+        setTimeout(() => resolve(), 0)
+      })
+
+    addEventListener("turbo:before-render", (event) => {
+      const { detail } = event as CustomEvent
+      const { render } = detail
+      detail.render = async (currentElement: HTMLBodyElement, newElement: HTMLBodyElement) => {
+        await nextEventLoopTick()
+
+        newElement.insertAdjacentHTML("beforeend", `<span id="custom-rendered">Custom Rendered</span>`)
+        render(currentElement, newElement)
+      }
+    })
+
+    addEventListener("turbo:load", () => {
+      localStorage.setItem("renderedElement", document.getElementById("custom-rendered")?.textContent || "")
+    })
+  })
+  await page.click("#same-origin-link")
+  await nextEventNamed(page, "turbo:load")
+
+  const renderedElement = await page.evaluate(() => localStorage.getItem("renderedElement"))
+
+  assert.equal(renderedElement, "Custom Rendered", "renders with custom function")
 })
 
 test("test wont reload when tracked elements has a nonce", async ({ page }) => {
@@ -395,6 +461,36 @@ test("test preserves permanent element video playback", async ({ page }) => {
   assert.equal(timeAfterRender, timeBeforeRender, "element state is preserved")
 })
 
+test("test preserves permanent element through Turbo Stream update", async ({ page }) => {
+  await page.evaluate(() => {
+    window.Turbo.renderStreamMessage(`
+      <turbo-stream action="update" target="frame">
+        <template>
+          <div id="permanent-in-frame" data-turbo-permanent>Ignored</div>
+        </template>
+      </turbo-stream>
+    `)
+  })
+  await nextBeat()
+
+  assert.equal(await page.textContent("#permanent-in-frame"), "Rendering")
+})
+
+test("test preserves permanent element through Turbo Stream append", async ({ page }) => {
+  await page.evaluate(() => {
+    window.Turbo.renderStreamMessage(`
+      <turbo-stream action="append" target="frame">
+        <template>
+          <div id="permanent-in-frame" data-turbo-permanent>Ignored</div>
+        </template>
+      </turbo-stream>
+    `)
+  })
+  await nextBeat()
+
+  assert.equal(await page.textContent("#permanent-in-frame"), "Rendering")
+})
+
 test("test preserves input values", async ({ page }) => {
   await page.fill("#text-input", "test")
   await page.click("#checkbox-input")
@@ -475,6 +571,13 @@ test("test error pages", async ({ page }) => {
   await nextBody(page)
 
   assert.equal(await page.textContent("body"), "404 Not Found: /nonexistent\n")
+})
+
+test("test rendering a redirect response replaces the body once and only once", async ({ page }) => {
+  await page.click("#redirect-link")
+  await nextBodyMutation(page)
+
+  assert.ok(await noNextBodyMutation(page), "replaces <body> element once")
 })
 
 function deepElementsEqual(

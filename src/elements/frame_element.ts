@@ -1,6 +1,6 @@
 import { FetchResponse } from "../http/fetch_response"
 import { Snapshot } from "../core/snapshot"
-import { LinkClickObserverDelegate } from "../observers/link_click_observer"
+import { LinkInterceptorDelegate } from "../core/frames/link_interceptor"
 import { FormSubmitObserverDelegate } from "../observers/form_submit_observer"
 
 export enum FrameLoadingStyle {
@@ -10,14 +10,16 @@ export enum FrameLoadingStyle {
 
 export type FrameElementObservedAttribute = keyof FrameElement & ("disabled" | "complete" | "loading" | "src")
 
-export interface FrameElementDelegate extends LinkClickObserverDelegate, FormSubmitObserverDelegate {
+export interface FrameElementDelegate extends LinkInterceptorDelegate, FormSubmitObserverDelegate {
   connect(): void
   disconnect(): void
   completeChanged(): void
   loadingStyleChanged(): void
   sourceURLChanged(): void
+  sourceURLReloaded(): Promise<void>
   disabledChanged(): void
   loadResponse(response: FetchResponse): void
+  proposeVisitIfNavigatedWithAction(frame: FrameElement, element: Element, submitter?: HTMLElement): void
   fetchResponseLoaded: (fetchResponse: FetchResponse) => void
   visitCachedSnapshot: (snapshot: Snapshot) => void
   isLoading: boolean
@@ -63,11 +65,7 @@ export class FrameElement extends HTMLElement {
   }
 
   reload(): Promise<void> {
-    const { src } = this
-    this.removeAttribute("complete")
-    this.src = null
-    this.src = src
-    return this.loaded
+    return this.delegate.sourceURLReloaded()
   }
 
   attributeChangedCallback(name: string) {

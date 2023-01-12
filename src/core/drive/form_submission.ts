@@ -1,9 +1,8 @@
-import { FetchRequest, FetchMethod, fetchMethodFromString, FetchRequestHeaders } from "../../http/fetch_request"
+import { FetchRequest, FetchMethod, fetchMethodFromString } from "../../http/fetch_request"
 import { FetchResponse } from "../../http/fetch_response"
 import { expandURL } from "../url"
-import { dispatch, getAttribute, getMetaContent } from "../../util"
+import { dispatch, getAttribute, getMetaContent, hasAttribute } from "../../util"
 import { StreamMessage } from "../streams/stream_message"
-import { TurboFetchRequestErrorEvent } from "../session"
 
 export interface FormSubmissionDelegate {
   formSubmissionStarted(formSubmission: FormSubmission): void
@@ -150,11 +149,11 @@ export class FormSubmission {
 
   // Fetch request delegate
 
-  prepareHeadersForRequest(headers: FetchRequestHeaders, request: FetchRequest) {
+  prepareRequest(request: FetchRequest) {
     if (!request.isIdempotent) {
       const token = getCookieValue(getMetaContent("csrf-param")) || getMetaContent("csrf-token")
       if (token) {
-        headers["X-CSRF-Token"] = token
+        request.headers["X-CSRF-Token"] = token
       }
     }
 
@@ -197,10 +196,6 @@ export class FormSubmission {
 
   requestErrored(request: FetchRequest, error: Error) {
     this.result = { success: false, error }
-    dispatch<TurboFetchRequestErrorEvent>("turbo:fetch-request-error", {
-      target: this.formElement,
-      detail: { request, error },
-    })
     this.delegate.formSubmissionErrored(this, error)
   }
 
@@ -221,7 +216,7 @@ export class FormSubmission {
   }
 
   requestAcceptsTurboStreamResponse(request: FetchRequest) {
-    return !request.isIdempotent || this.formElement.hasAttribute("data-turbo-stream")
+    return !request.isIdempotent || hasAttribute("data-turbo-stream", this.submitter, this.formElement)
   }
 }
 

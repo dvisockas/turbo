@@ -1,4 +1,5 @@
 import { LinkClickObserver, LinkClickObserverDelegate } from "./link_click_observer"
+import { getVisitAction } from "../util"
 
 export type FormLinkClickObserverDelegate = {
   willSubmitFormLinkToLocation(link: Element, location: URL, event: MouseEvent): boolean
@@ -6,20 +7,20 @@ export type FormLinkClickObserverDelegate = {
 }
 
 export class FormLinkClickObserver implements LinkClickObserverDelegate {
-  readonly linkClickObserver: LinkClickObserver
+  readonly linkInterceptor: LinkClickObserver
   readonly delegate: FormLinkClickObserverDelegate
 
   constructor(delegate: FormLinkClickObserverDelegate, element: HTMLElement) {
     this.delegate = delegate
-    this.linkClickObserver = new LinkClickObserver(this, element)
+    this.linkInterceptor = new LinkClickObserver(this, element)
   }
 
   start() {
-    this.linkClickObserver.start()
+    this.linkInterceptor.start()
   }
 
   stop() {
-    this.linkClickObserver.stop()
+    this.linkInterceptor.stop()
   }
 
   willFollowLinkToLocation(link: Element, location: URL, originalEvent: MouseEvent): boolean {
@@ -30,10 +31,16 @@ export class FormLinkClickObserver implements LinkClickObserverDelegate {
   }
 
   followedLinkToLocation(link: Element, location: URL): void {
-    const action = location.href
     const form = document.createElement("form")
+
+    const type = "hidden"
+    for (const [name, value] of location.searchParams) {
+      form.append(Object.assign(document.createElement("input"), { type, name, value }))
+    }
+
+    const action = Object.assign(location, { search: "" })
     form.setAttribute("data-turbo", "true")
-    form.setAttribute("action", action)
+    form.setAttribute("action", action.href)
     form.setAttribute("hidden", "")
 
     const method = link.getAttribute("data-turbo-method")
@@ -41,6 +48,9 @@ export class FormLinkClickObserver implements LinkClickObserverDelegate {
 
     const turboFrame = link.getAttribute("data-turbo-frame")
     if (turboFrame) form.setAttribute("data-turbo-frame", turboFrame)
+
+    const turboAction = getVisitAction(link)
+    if (turboAction) form.setAttribute("data-turbo-action", turboAction)
 
     const turboConfirm = link.getAttribute("data-turbo-confirm")
     if (turboConfirm) form.setAttribute("data-turbo-confirm", turboConfirm)

@@ -10,11 +10,15 @@ export type TurboBeforeFetchRequestEvent = CustomEvent<{
 export type TurboBeforeFetchResponseEvent = CustomEvent<{
   fetchResponse: FetchResponse
 }>
+export type TurboFetchRequestErrorEvent = CustomEvent<{
+  request: FetchRequest
+  error: Error
+}>
 
 export interface FetchRequestDelegate {
   referrer?: URL
 
-  prepareHeadersForRequest?(headers: FetchRequestHeaders, request: FetchRequest): void
+  prepareRequest(request: FetchRequest): void
   requestStarted(request: FetchRequest): void
   requestPreventedHandlingResponse(request: FetchRequest, response: FetchResponse): void
   requestSucceededWithResponse(request: FetchRequest, response: FetchResponse): void
@@ -99,7 +103,7 @@ export class FetchRequest {
 
   async perform(): Promise<FetchResponse | void> {
     const { fetchOptions } = this
-    this.delegate.prepareHeadersForRequest?.(this.headers, this)
+    this.delegate.prepareRequest(this)
     await this.allowRequestToBeIntercepted(fetchOptions)
     try {
       this.delegate.requestStarted(this)
@@ -107,7 +111,9 @@ export class FetchRequest {
       return await this.receive(response)
     } catch (error) {
       if ((error as Error).name !== "AbortError") {
-        this.delegate.requestErrored(this, error as Error)
+        if (this.willDelegateErrorHandling(error as Error)) {
+          this.delegate.requestErrored(this, error as Error)
+        }
         throw error
       }
     } finally {
@@ -174,5 +180,15 @@ export class FetchRequest {
       target: this.target as EventTarget,
     })
     if (event.defaultPrevented) await requestInterception
+  }
+
+  private willDelegateErrorHandling(error: Error) {
+    const event = dispatch<TurboFetchRequestErrorEvent>("turbo:fetch-request-error", {
+      target: this.target as EventTarget,
+      cancelable: true,
+      detail: { request: this, error: error },
+    })
+
+    return !event.defaultPrevented
   }
 }
